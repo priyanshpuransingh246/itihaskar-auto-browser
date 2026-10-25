@@ -1,4 +1,3 @@
-
 name: "Build Itihaskar Auto Browser APK"
 
 on:
@@ -11,13 +10,17 @@ on:
 jobs:
   build_apk:
     runs-on: ubuntu-latest
+
     steps:
       - name: "Step 1 - Checkout Repository"
         uses: actions/checkout@v4
 
       - name: "Step 2 - Generate Android Project Files"
+        shell: bash
         run: |
-          cat << 'EOF' | tr -d ' \t\r\n' | base64 -d > project_bundle.zip
+          set -euo pipefail
+
+          cat <<'EOF' | tr -d ' \t\r\n' | base64 -d > project_bundle.zip
           UEsDBBQAAAAIALSWWV2HPuvUuAAAAFEBAAAPAAAAc2V0dGluZ3MuZ3JhZGxlpY9BSwMxFITv+RVh
           T+2lP0DwUEuFinXD2vvy2AwxNZsXXt4qIv3vbUVK6cGLc/yGGWZKmkLMW8oUMCKr/Tb2JEHhGpUl
           ov6iswJzSJjNL2CkD+TVKSeUrnAQ8gnup9ux6MU8mIPxKMgeefjqUDlNGvnvAVv2WFTorLuFj8vN
@@ -153,7 +156,7 @@ jobs:
           TlRbMRSYF/ibf4PApQImPowXRvnVEJ3gYnVrxH3PBqj8xwCogoe3+80HQCZzlEZKP8OUjbxFSa6i
           mvz8xgFLqNX8Ho8kTsG25Y5ogCdE44slK1lkG02pS5gDHgVeWjZHhnxsmz/tSXeH5u95omt+F1Qr
           Y2R8ajTt8T+rYK4tijrcXuLkF0i1UsJFmW/zGx+dweXOwSVJTrEbN/+5zyB3l0bn2p2FuWlNk9vb
-          6gTDk2l/RnCzlx5Ijc/KaHxMSXCPXXK0qZF4jXZZBTX/C1BLAQIUAxQAAAAIALSWWV2HPuvUuAAA
+          6gTDk2l/RnCzlx5Ijc/KaHxMSXCPXXK0qZF4jXZZBTX/C1BLAQIUAxQAAAAIALSWWV2HPuvUuAAAA
           AFEBAAAPAAAAAAAAAAAAAACAAQAAAABzZXR0aW5ncy5ncmFkbGVQSwECFAMUAAAACAC0llldlo0y
           PEYAAABJAAAADAAAAAAAAAAAAAAAgAHlAAAAYnVpbGQuZ3JhZGxlUEsBAhQDFAAAAAgAtJZZXVZv
           BXkQAQAAYwIAABAAAAAAAAAAAAAAAIABVQEAAGFwcC9idWlsZC5ncmFkbGVQSwECFAMUAAAACAC0
@@ -163,23 +166,38 @@ jobs:
           AhQDFAAAAAgAtJZZXVD+NXeUDgAAfSoAAB4AAAAAAAAAAAAAAIABYQ8AAGFwcC9zcmMvbWFpbi9h
           c3NldHMvYXV0b2JvdC5qc1BLBQYAAAAABgAGALYBAAAxHgAAAAA=
           EOF
-          unzip -o project_bundle.zip
-          ls -la
+
+          unzip -t project_bundle.zip >/dev/null
+          unzip -o -q project_bundle.zip
+          find . -maxdepth 2 -type f | sort
 
       - name: "Step 3 - Set up Java JDK 17"
         uses: actions/setup-java@v4
         with:
           java-version: "17"
           distribution: "temurin"
+          cache: gradle
 
       - name: "Step 4 - Setup Android SDK"
+        shell: bash
         run: |
-          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          echo "sdk.dir=$SDK_ROOT" > local.properties
-          SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager 2>/dev/null | head -n 1)
-          if [ -n "$SDKMANAGER" ]; then
-            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
-            "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
+          set -euo pipefail
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          export ANDROID_HOME="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ] && [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/bin/sdkmanager" ]; then
+            echo "Android SDK command-line tools are missing. Installing them..."
+            echo "y" | sdkmanager --licenses >/dev/null 2>&1 || true
+            sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          else
+            SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -path '*/bin/sdkmanager' -type f 2>/dev/null | head -n 1)"
+            if [ -n "$SDKMANAGER" ]; then
+              echo "y" | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+              "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+            fi
           fi
 
       - name: "Step 5 - Setup Gradle 8.5"
@@ -188,7 +206,15 @@ jobs:
           gradle-version: "8.5"
 
       - name: "Step 6 - Compile Debug APK"
-        run: gradle assembleDebug --no-daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f ./gradlew ]; then
+            echo "Gradle wrapper is missing. The extracted Android project is not present or the zip did not unpack correctly."
+            exit 1
+          fi
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
 
       - name: "Step 7 - Upload Ready-to-Install APK"
         uses: actions/upload-artifact@v4
